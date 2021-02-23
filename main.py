@@ -1,16 +1,12 @@
-from time import sleep
-
-from selenium import webdriver
-from selenium.webdriver.common.keys import Keys
 import json
 
-from sqlalchemy import Table, Column, Boolean, MetaData, insert, inspect
-from sqlalchemy import Integer, String
-
 import requests
+from selenium import webdriver
+from selenium.webdriver.common.keys import Keys
+from sqlalchemy import Integer, String
+from sqlalchemy import Table, Column, Boolean, MetaData
 from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import mapper, sessionmaker, Session
+from sqlalchemy.orm import mapper, Session
 
 
 class CommandHandler(object):
@@ -19,13 +15,18 @@ class CommandHandler(object):
         self.commands = {"?": [self.help, "? [command]"],
                          "ping": [self.ping, "ping"],
                          "login": [self.login, "login <file>\n\tlogin <login> <password>"],
-                         "find": [self.find, "find <project> [page]"]}
-        self.engine = create_engine('sqlite:///db.sqlite', echo=True)
+                         "find": [self.find, "find <project> [page]"],
+                         "select": [self.select, "select <project> - project value is id_repo or name"],
+                         "branch": [self.branch, "branch <project> - project value is id_repo or name"],
+                         "files": [self.files, "files <project> <branch>"]
+                         }
+        # self.engine = create_engine('sqlite:///db.sqlite', echo=True)
+        self.engine = create_engine('sqlite:///db.sqlite')
         self.connection = self.engine.connect()
         self.metadata = MetaData()
         self.session = Session()
 
-        self.user_table = Table('repo', MetaData(bind=None, schema="main"),
+        self.repo_table = Table('repo', MetaData(bind=None, schema="main"),
                                 Column('id', Integer, primary_key=True, autoincrement=True),
                                 Column('id_repo', Integer),
                                 Column('name', String),
@@ -36,7 +37,51 @@ class CommandHandler(object):
                                 Column('branches_url', String), autoload=True, autoload_with=self.engine
                                 )
         # self.user_table.create(self.engine)
-        mapper(Project, self.user_table)
+        mapper(Project, self.repo_table)
+        self.branch_table = Table('branch', MetaData(bind=None, schema="main"),
+                                  Column('id', Integer, primary_key=True, autoincrement=True),
+                                  Column('id_repo', Integer),
+                                  Column('branch', String),
+                                  Column('branch_name', String),
+                                  Column('branches_url', String),
+                                  Column('author_name', String),
+                                  Column('files', String), autoload=True, autoload_with=self.engine
+                                  )
+        # self.branch_table.create(self.engine)
+
+    def select_project(self, id_repo: int = 0, name: str = None):
+        if id_repo != 0:
+            select_st = self.repo_table.select().where(
+                self.repo_table.c.id_repo == id_repo).limit(1)
+        else:
+            select_st = self.repo_table.select().where(
+                self.repo_table.c.name == name).limit(1)
+        res = self.connection.execute(select_st)
+        for _row in res:
+            return _row
+        return None
+
+    def select(self, line: str):
+        args = line.split()
+        try:
+            number = int(args[1])
+            project = self.select_project(id_repo=number)
+            if project == None:
+                print("Project not found")
+                return
+            print(project)
+            return
+        except Exception:
+            if len(args) <= 1 or len(args[1]) == 0:
+                print("Bad args, use `? select`")
+                return
+            name = args[1]
+            project = self.select_project(name=name)
+            if project == None:
+                print("Project not found")
+                return
+            print(project)
+            return
 
     def ping(self, line: str):
         print("pong")
@@ -167,27 +212,162 @@ class CommandHandler(object):
             projects = self.getProjects(args[1], args[2])
         else:
             projects = self.getProjects(args[1])
+        added = 0
         for i in projects:
             project: Project = i
-            # stmt = (
-            # insert(self.user_table).values(id_repo=project.id, name=project.name, full_name=project.full_name,
-            #                                private=project.private, owner=project.owner, url=project.url,
-            #                                branches_url=project.branches_url)
-            # )
-            # self.user_table.insert(id_repo=project.id, name=project.name, full_name=project.full_name, private=project.private, owner=project.owner, url=project.url, branches_url=project.branches_url)
-            self.user_table.insert().values(project)
+            # print(project)
 
-            self.user_table.update()
-            # self.session.add(project)
+            select_st = self.repo_table.select().where(
+                self.repo_table.c.id_repo == project.id_repo).limit(1)
+            res = self.connection.execute(select_st)
+            flag = False
+            for i in res:
+                flag = True
+                break
+
+            if flag:
+                continue
+
+            added += 1
+            print("find " + str(project.id_repo) + ", " + project.full_name)
+            ins = self.repo_table.insert().values(
+                id_repo=project.id_repo,
+                name=project.name,
+                full_name=project.full_name,
+                private=project.private,
+                owner=project.owner,
+                url=project.url,
+                branches_url=project.branches_url
+            )
+            conn = self.engine.connect()
+            conn.execute(ins)
+        self.session.commit()
+        print("find " + str(len(projects)) + " projects, added " + str(added))
+
+    def branchExist(self, id_repo: int = 0, name: str = None):
+        print("exist", id_repo)
+        print("name", name)
+        if id_repo == 0 and name == None:
+            return False, None
+        if id_repo == 0:
+            select_st = self.branch_table.select().where(
+                self.branch_table.c.branch == name).limit(1)
+            res = self.connection.execute(select_st)
+            flag = False
+            branchs = []
+            for i in res:
+                flag = True
+                branchs.append(i)
+
+            if flag:
+                return True, branchs
+            return False, None
+        else:
+            select_st = self.branch_table.select().where(
+                self.branch_table.c.id_repo == id_repo).limit(1)
+            res = self.connection.execute(select_st)
+            flag = False
+            branchs = []
+            for i in res:
+                flag = True
+                branchs.append(i)
+
+            if flag:
+                return True, branchs
+            return False, None
+
+    def branch(self, line):
+        args = line.split()
+
+        number = 0
+        name = None
+
+        try:
+            number = int(args[1])
+            project = self.select_project(id_repo=number)
+            if project == None:
+                print("Project not found")
+                return
+        except Exception:
+            if len(args) <= 1 or len(args[1]) == 0:
+                print("Bad args, use `? select`")
+                return
+            name = args[1]
+            project = self.select_project(name=name)
+            if project == None:
+                print("Project not found")
+                return
+
+        flag, branchs = self.branchExist(name=name, id_repo=number)
+        if flag:
+            for i in branchs:
+                print(i)
+            return
+
+        branch_url = project[6]
+        r = requests.get(branch_url + "/branches")
+        print(r.json())
+
+        for i in r.json():
+            req_branch = requests.get(branch_url + "/branches/" + i['name'])
+            req_commit = requests.get(req_branch.json()['commit']['url'])
+            print("commit", req_commit.json())
+            files = ""
+            for j in req_commit.json()['files']:
+                files += j['filename'] + ", "
+            print("req " + str(req_branch.json()))
+            ins = self.branch_table.insert().values(
+                id_repo=project[1],
+                branch=project[2],
+                branch_name=i['name'],
+                branches_url=branch_url + "/branches/" + i['name'],
+                author_name=req_branch.json()['commit']['commit']['author']['name'],
+                files=files
+            )
+            conn = self.engine.connect()
+            conn.execute(ins)
         self.session.commit()
 
-        print("find " + str(len(projects)) + " projects")
+    def files(self, line):
+        args = line.split()
+
+        number = 0
+        name = None
+        if len(line.split()) != 3:
+            print("Bad args, use `? files`")
+            return
+        try:
+            number = int(args[1])
+            project = self.select_project(id_repo=number)
+            if project == None:
+                print("Project not found")
+                return
+        except Exception:
+            if len(args) <= 1 or len(args[1]) == 0:
+                print("Bad args, use `? files`")
+                return
+            name = args[1]
+            project = self.select_project(name=name)
+            if project == None:
+                print("Project not found")
+                return
+
+        flag, branchs = self.branchExist(name=name, id_repo=number)
+        if flag:
+            for i in branchs:
+                print(i)
+                if i[3] == args[2]:
+                    print(i[6])
+                    return
+        print("Branch not found")
+        return
 
     def run(self):
         # engine.execute("select * from repo").scalar()
-        self.find("find DivineRPG_Fix")
         while 1:
             line = str(input())
+            if len(line) == 0:
+                continue
             command = self.getCommandByName(line.split()[0])
             if command is None:
                 print("command not found, use ?")
@@ -195,10 +375,11 @@ class CommandHandler(object):
                 command[0](line)
 
 
-class Project:
+class Project():
+    __tablename__ = 'repo'
+
     def __init__(self, id_repo: int, name: str, full_name: str, private: bool, owner: str, html_url: str,
-                 description: str,
-                 fork: bool, url: str, branches_url: str):
+                 description: str, fork: bool, url: str, branches_url: str):
         self.id_repo: int = id_repo
         self.name: str = name
         self.full_name: str = full_name
@@ -211,14 +392,12 @@ class Project:
         self.branches_url: str = branches_url
 
     def __repr__(self):
-        return "<User('%d', '%s', '%s', '%b', '%s', '%s', '%s')>" % (
-            self.id_repo, self.name, self.full_name, self.private, self.owner, self.url, self.branches_url)
+        return "<Project('%d', '%s', '%s', False, '%s', '%s', '%s')>" % (
+            self.id_repo, self.name, self.full_name, self.owner, self.url, self.branches_url)
 
 
 commandHandler = CommandHandler()
 commandHandler.run()
-
-#
 # params = None
 # with open("params.json", "r") as file:
 #     params = json.load(file)
